@@ -2,6 +2,20 @@
 
 Página pública e painel de moderação, em português, com HTML/CSS/JavaScript e Supabase. Os ficheiros de `dist/` já estão gerados.
 
+## Instalação publicada
+
+Esta cópia está configurada em **modo live**, com a base de dados Supabase do projeto **Debate Moderator 3000** e publicação pelo GitHub Pages:
+
+- Público: <https://1220823.github.io/Viralytics-Debate-Moderator/>
+- Moderação: <https://1220823.github.io/Viralytics-Debate-Moderator/moderacao.html>
+- Apresentação: <https://1220823.github.io/Viralytics-Debate-Moderator/index.html?projecao=1>
+
+O acesso de moderação foi criado e autorizado no Supabase. Usa o email e a palavra-passe definidos no Dashboard. Os espectadores não precisam de conta. O registo público de novas contas está desativado; novas contas de moderação devem ser criadas no Dashboard e autorizadas na tabela `debate_private.moderators`.
+
+Para testar em vários dispositivos, abre a moderação no computador, a apresentação no ecrã da sala e a página pública num telemóvel. Todos precisam de Internet; não precisam de estar na mesma rede. Faz o voto inicial no telemóvel, confirma o contador na apresentação, começa o debate pelo painel e envia uma sugestão com confirmação. Para testar o voto final, mantém o mesmo navegador no telemóvel. Só a apresentação emite os avisos sonoros depois de carregares em **Ativar som**.
+
+**Preparar novo debate** cria uma sessão nova e preserva os votos e sugestões da sessão anterior. O estado é partilhado: evita reiniciar a sessão enquanto outro moderador estiver a conduzir um evento.
+
 ## Experimentar já, neste computador
 
 Na pasta do projeto, executa:
@@ -16,7 +30,7 @@ Abre:
 - Moderação: <http://127.0.0.1:4173/moderacao.html>
 - Projeção: <http://127.0.0.1:4173/index.html?projecao=1>
 
-O modo inicial é **ensaio local**. Abre público e moderação em separadores do mesmo navegador. No painel escolhe **Entrar no ensaio local**. Neste modo não há palavra-passe nem sincronização entre computadores. O painel identifica o modo de ensaio; não o uses para o evento público.
+Nesta instalação, o servidor local também usa a **BD real**, porque `config.js` tem `mode: 'live'`. Para um ensaio isolado neste computador, muda temporariamente para `mode: 'demo'` e volta a gerar `dist/` com `npm run build`. Nesse modo, abre público e moderação em separadores do mesmo navegador e escolhe **Entrar no ensaio local**. Não há palavra-passe nem sincronização entre computadores. Volta a `mode: 'live'` antes de publicar; um push para `main` publica a configuração que estiver no ficheiro.
 
 Para ensaiar resultados, o botão **Gerar 22 votos de teste** cria os votos 15/2/5 durante o inquérito inicial e 12/1/9 durante o final. Se também votares nesse navegador, o teu voto é contado adicionalmente. **Preparar novo debate** abre uma nova sessão sem apagar a anterior.
 

@@ -2,7 +2,7 @@
 
 ## Automática
 
-Última execução: **23 testes passaram, zero falhas**. O build também terminou com sucesso.
+Última execução: **23 testes passaram, zero falhas**. O build também terminou com sucesso, incluindo a publicação pelo GitHub Actions.
 
 Testes Node.js e PostgreSQL em PGlite cobrem:
 
@@ -47,4 +47,19 @@ Validação responsiva no Chrome a **390 × 844 pixels**: inquérito, pergunta, 
 
 ## Limite da verificação
 
-A autenticação e o transporte Realtime num projeto Supabase alojado necessitam das configurações do proprietário e ainda não foram testados contra uma conta real. O backend SQL foi executado e verificado no PostgreSQL local. A reprodução dos avisos deve ser ensaiada no equipamento de som da sala.
+## Ensaio na instalação online
+
+A base de dados do projeto **Debate Moderator 3000** foi instalada e a app foi publicada em <https://1220823.github.io/Viralytics-Debate-Moderator/>. O modo da app é `live`.
+
+Verificações realizadas no projeto real, com autorização para os dados de teste:
+
+- Conta de moderação criada pelo proprietário, autorizada e login confirmado.
+- Espectador no Chrome e moderação/apresentação no navegador do Codex: voto inicial, contador e mudança de fase sincronizados pela BD e Realtime.
+- Envio de uma sugestão após confirmação e receção no painel.
+- Dois relógios em contagem, pausa e popup QR sem modificar os relógios.
+- Voto inicial Neutro e final Contra do mesmo espectador: um par completo, gráficos corretos e Contra com ganho de um voto.
+- API dos dados de moderação rejeita acesso anónimo.
+- Registo público de contas desativado e Site URL configurado para o endereço publicado.
+- Sessão nova preparada no fim: zero votos e zero sugestões; dados do ensaio preservados na sessão anterior.
+
+O teste usou navegadores separados no computador. O teste físico no telemóvel e a reprodução dos avisos no equipamento de som da sala ficam para o proprietário. O SQL continua a ter a cobertura local em PostgreSQL/PGlite.
