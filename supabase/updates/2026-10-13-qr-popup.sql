@@ -10,14 +10,27 @@ begin
  if v<>p_version then raise exception 'O estado mudou noutro dispositivo. Atualiza e tenta novamente.' using errcode='40001'; end if;
  n:=debate_private.now_ms(); sid:=(s->>'sessionId')::uuid; prev:=s||debate_private.snapshot(s,n);
  idx:=(s->>'roundIndex')::integer; r:=s->'rounds'->idx; count_rounds:=jsonb_array_length(s->'rounds');
- if p_action in ('start','pause','start_all','pause_all','adjust','set_time','penalty','reset_round','goto','next','previous','add_extra','set_speaker') and s->>'phase'<>'debate' then raise exception 'Este controlo está disponível durante o debate.'; end if;
- if p_action in ('start','pause','adjust','set_time','penalty','set_speaker') then k:=p_payload->>'team'; if k is null or k not in ('a','b') then raise exception 'Equipa inválida.'; end if; end if;
+ if p_action in ('start','pause','start_all','pause_all','toggle_timer','toggle_all','toggle_dim','adjust','set_time','penalty','reset_round','goto','next','previous','add_extra','set_speaker') and s->>'phase'<>'debate' then raise exception 'Este controlo está disponível durante o debate.'; end if;
+ if p_action in ('start','pause','toggle_timer','toggle_dim','adjust','set_time','penalty','set_speaker') then k:=p_payload->>'team'; if k is null or k not in ('a','b') then raise exception 'Equipa inválida.'; end if; end if;
  case p_action
  when 'start_debate' then
   if s->>'phase'<>'initial_poll' then raise exception 'A votação inicial já terminou.'; end if;
   s:=jsonb_set(s,'{phase}','"debate"'); s:=jsonb_set(s,'{qrVisible}','false');
  when 'toggle_qr' then
   s:=jsonb_set(s,'{qrVisible}',to_jsonb(not coalesce((s->>'qrVisible')::boolean,false)));
+ when 'toggle_dim' then
+  if r->>'kind' not in ('lightning','extra') then raise exception 'Atenuar cartões está disponível nas rondas relâmpago.'; end if;
+  if s->'dimmed' is null then s:=jsonb_set(s,'{dimmed}','{"a":false,"b":false}'); end if;
+  s:=jsonb_set(s,array['dimmed',k],to_jsonb(not coalesce((s->'dimmed'->>k)::boolean,false)));
+ when 'toggle_timer','toggle_all' then
+  if p_action='toggle_all' then keys:=array['a','b']; else keys:=array[k]; end if;
+  running:=false;
+  foreach k in array keys loop running:=running or s->'timers'->k->>'endsAt' is not null; end loop;
+  foreach k in array keys loop
+   t:=s->'timers'->k;
+   if running then t:=debate_private.paused_timer(t,n); else t:=jsonb_set(t,'{endsAt}',to_jsonb(n+(t->>'remainingMs')::bigint)); end if;
+   s:=jsonb_set(s,array['timers',k],t);
+  end loop;
  when 'start','start_all','pause','pause_all' then
   if p_action in ('start_all','pause_all') then keys:=array['a','b']; else keys:=array[k]; end if;
   foreach k in array keys loop
@@ -42,7 +55,7 @@ begin
   s:=jsonb_set(s,array['timers',k],t);
  when 'reset_round' then
   foreach k in array array['a','b'] loop s:=jsonb_set(s,array['timers',k],jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',(s->'timers'->k->>'epoch')::integer+1)); end loop;
-  s:=s||jsonb_build_object('penalties',jsonb_build_object('a',0,'b',0),'speakers',jsonb_build_object('a','','b',''));
+  s:=s||jsonb_build_object('penalties',jsonb_build_object('a',0,'b',0),'speakers',jsonb_build_object('a','','b',''),'dimmed',jsonb_build_object('a',false,'b',false));
  when 'goto','next','previous' then
   if p_action='goto' then idx:=(p_payload->>'index')::integer; elsif p_action='next' then idx:=idx+1; else idx:=idx-1; end if;
   s:=debate_private.goto_round(s,idx,n);
@@ -96,14 +109,14 @@ begin
  when 'reveal' then
   if s->>'phase'<>'results' or coalesce((s->'result'->>'paired')::integer,0)=0 then raise exception 'São necessárias respostas completas para revelar um vencedor.'; end if;
   s:=s||jsonb_build_object('phase','reveal','revealAt',n+3000);
- when 'reset_event' then s:=debate_private.fresh_state()||jsonb_build_object('teams',s->'teams');
+ when 'reset_event' then s:=debate_private.fresh_state()||jsonb_build_object('teams',s->'teams'); perform debate_private.seed_questions((s->>'sessionId')::uuid);
  when 'question_status' then
   if p_payload->>'status' is null or p_payload->>'status' not in ('new','selected','debated','discarded') then raise exception 'Estado da pergunta inválido.'; end if;
   update debate_private.questions set status=p_payload->>'status' where id=(p_payload->>'id')::uuid and session_id=sid;
   if not found then raise exception 'Pergunta não encontrada.'; end if;
  when 'undo' then
   select * into last_action from debate_private.actions where session_id=sid order by id desc limit 1;
-  if last_action.action is null or last_action.action not in ('start','pause','start_all','pause_all','adjust','set_time','penalty','reset_round','goto','next','previous','add_extra','set_speaker','configure') then raise exception 'Esta transição não pode ser desfeita.'; end if;
+  if last_action.action is null or last_action.action not in ('start','pause','start_all','pause_all','toggle_timer','toggle_all','toggle_dim','adjust','set_time','penalty','reset_round','goto','next','previous','add_extra','set_speaker','configure') then raise exception 'Esta transição não pode ser desfeita.'; end if;
   if last_action.action='add_extra' then update debate_private.questions set status=coalesce(last_action.detail->>'questionPreviousStatus','new') where id=(last_action.detail->>'sourceId')::uuid; end if;
   s:=last_action.previous_state;
  else raise exception 'Ação desconhecida.';

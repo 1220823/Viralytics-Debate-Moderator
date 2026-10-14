@@ -16,6 +16,16 @@ Para testar em vários dispositivos, abre a moderação no computador, a apresen
 
 **Preparar novo debate** cria uma sessão nova e preserva os votos e sugestões da sessão anterior. O estado é partilhado: evita reiniciar a sessão enquanto outro moderador estiver a conduzir um evento.
 
+## Atualização de interação
+
+O público só vê o acesso às perguntas depois de votar no inquérito inicial; durante os formulários de votação esse botão fica oculto. Em **Perguntas do público**, pode consultar sugestões, enviar uma nova com confirmação e dar **Gosto (+1)** ou **Não gosto (−1)**. Uma reação por pergunta e navegador; carregar novamente retira a reação. Perguntas iguais, ignorando maiúsculas e espaços, são recusadas. A moderação recebe as perguntas ordenadas por pontuação, incluindo na seleção de extras.
+
+Cada equipa tem um único botão branco que alterna entre **Retomar tempo** e **Parar tempo**. Nas relâmpago, **Atenuar cartão / Destacar cartão** altera apenas o aspeto público do cartão, sem pausar o relógio. A configuração visual é guardada por pergunta; voltar à anterior recupera-a com os relógios em pausa.
+
+Há **três relâmpago fixas**. As duas antigas perguntas finais entram automaticamente como sugestões da organização em cada sessão nova. Estão guardadas em `data/sugestoes-iniciais.json`; a fonte é `src/seeds.js`. Para voltar a importá-las no debate atual, executar **supabase/importar-sugestoes-iniciais.sql** no SQL Editor. A importação não as duplica.
+
+Para atualizar outro projeto já instalado, executar **supabase/updates/2026-10-14-interacao.sql**; preserva os dados existentes. Preparar depois um novo debate para passar a três perguntas fixas. **supabase/limpar-dados-debate.sql** é uma limpeza completa dos dados de todas as sessões (votos, perguntas, reações e ações), seguida de um debate novo com as duas sugestões; preserva as contas de moderação e os participantes. Guardar uma cópia antes de o usar. A cópia local desta atualização está em **backups/antes-limpeza-2026-10-14.json**, ignorada pelo Git e fora da pasta publicada.
+
 ## Experimentar já, neste computador
 
 Na pasta do projeto, executa:
@@ -48,9 +58,7 @@ No **SQL Editor**, executa o conteúdo completo de `supabase/setup.sql`. O fiche
 
 A migração é repetível e não apaga votos ou perguntas existentes. `schema.template.sql` é a fonte da migração; após alterações ao código, `npm run build` atualiza `setup.sql`.
 
-**Se já configuraste o Supabase antes desta atualização visual**, executa apenas `supabase/updates/2026-10-13-qr-popup.sql` no SQL Editor para acrescentar o comando do popup QR. Preserva os votos, sugestões e tempos existentes. Uma instalação nova já inclui esse comando em `setup.sql`.
-
-Para mostrar o número de votos recebidos na apresentação num Supabase já configurado, executa também `supabase/updates/2026-10-13-poll-counts.sql`. Esta atualização publica apenas os totais de participação, preserva os dados existentes e mantém privadas as escolhas individuais. Novas instalações incluem tudo em `setup.sql`.
+**Se o Supabase já está configurado**, executa `supabase/updates/2026-10-14-interacao.sql` no SQL Editor. Inclui o popup QR, os totais de participação, as sugestões e as reações. Preserva os votos, perguntas e tempos existentes. Uma instalação nova já inclui tudo em `setup.sql`.
 
 ### 3. Criar as contas de moderação
 
@@ -112,10 +120,10 @@ Testa o login e a sincronização entre dois dispositivos antes do evento. A int
 
 1. O espectador vê primeiro o inquérito inicial: **A favor / Neutro / Contra**. Depois de votar, vê **O debate está prestes a começar**, uma mensagem sobre a participação ao longo do debate e o botão **Sugerir uma pergunta**. A apresentação mostra o tema, as três opções, o total de pessoas que já votaram e o QR para participar. A moderação vê o contador e carrega em **Começar debate** quando estiver pronta.
 2. **Começar debate** fecha a votação inicial e mostra a primeira pergunta com os relógios pausados.
-3. Em cada ronda, usa os controlos por equipa ou **Retomar/Pausar ambos**. Os dois relógios podem contar simultaneamente.
+3. Em cada ronda, usa os controlos por equipa ou **Retomar/Parar ambos**. Os dois relógios podem contar simultaneamente.
 4. Rondas iniciais: **5 minutos por equipa**, A começa na primeira e Contra na segunda.
-5. Relâmpago: **30 segundos por equipa** em cada uma das cinco perguntas. Os participantes já usados são assinalados; é necessária confirmação para repetir nas perguntas previstas.
-6. Depois da quinta pergunta, escolhe **Adicionar pergunta do público** ou **Closing statements**. Depois de cada extra mantêm-se as mesmas opções, sem limite fixo de extras. Cada extra tem 30 segundos por equipa e permite repetir participantes.
+5. Relâmpago: **30 segundos por equipa** em cada uma das três perguntas fixas. Os participantes já usados são assinalados; é necessária confirmação para repetir nas perguntas previstas.
+6. Depois da terceira pergunta, escolhe **Adicionar pergunta do público** ou **Closing statements**. Depois de cada extra mantêm-se as mesmas opções, sem limite fixo de extras. Cada extra tem 30 segundos por equipa e permite repetir participantes.
 7. Closing statements: **2 minutos e 30 segundos por equipa**.
 8. **Abrir votação final** apresenta o mesmo inquérito a quem votou no início, no mesmo navegador.
 9. **Fechar votação final** fixa os pares completos. **Mostrar resultados** publica os dois gráficos. **Revelar vencedor** apresenta três segundos de suspense e o resultado.

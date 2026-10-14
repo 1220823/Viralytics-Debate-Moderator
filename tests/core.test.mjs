@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import { newState, applyCommand, remaining, results, formatTime, currentRound } from '../src/core.js';
 import { validateConfig } from '../src/config.js';
 const initial = () => applyCommand(newState(0), 'start_debate', {}, 0);
+
+test('três relâmpago fixas e controlo visual separado do relógio',()=>{
+  assert.equal(newState().rounds.filter(r=>r.kind==='lightning').length,3);
+  let s=applyCommand(initial(),'toggle_timer',{team:'a'},1000);
+  assert.equal(s.timers.a.endsAt,301000);assert.equal(s.timers.b.endsAt,null);
+  s=applyCommand(s,'toggle_all',{},11000);assert.equal(s.timers.a.remainingMs,290000);assert.equal(s.timers.a.endsAt,null);
+  s=applyCommand(s,'goto',{index:2},11000);s=applyCommand(s,'toggle_all',{},12000);
+  const timers=structuredClone(s.timers);
+  s=applyCommand(s,'toggle_dim',{team:'b'},16000);assert.equal(s.dimmed.b,true);assert.deepEqual(s.timers,timers);
+  s=applyCommand(s,'next',{},17000);assert.equal(s.dimmed.b,false);
+  s=applyCommand(s,'previous',{},18000);assert.equal(s.dimmed.b,true);assert.equal(s.timers.b.endsAt,null);
+});
 test('popup QR é reversível e não altera a fase nem os relógios',()=>{
   let s=applyCommand(initial(),'start_all',{},1000);const clocks=structuredClone(s.timers);
   s=applyCommand(s,'toggle_qr',{},5000);assert.equal(s.qrVisible,true);assert.equal(s.phase,'debate');assert.deepEqual(s.timers,clocks);
@@ -18,9 +30,9 @@ test('configuração rejeita chaves secret/service_role e aceita apenas publisha
   assert.doesNotThrow(()=>validateConfig({...config,supabasePublishableKey:'sb_publishable_test_public_key'}));
 });
 test('configuração da ordem mantém alternância em todas as relâmpago',()=>{
-  let s=applyCommand(initial(),'goto',{index:6},0);s=applyCommand(s,'add_extra',{text:'Extra?'},0);
+  let s=applyCommand(initial(),'goto',{index:4},0);s=applyCommand(s,'add_extra',{text:'Extra?'},0);
   s=applyCommand(s,'configure',{a:s.teams.a.members,b:s.teams.b.members,lightningFirst:'b',closingFirst:'b'},0);
-  assert.deepEqual(s.rounds.filter(r=>['lightning','extra'].includes(r.kind)).map(r=>r.first),['b','a','b','a','b','a']);
+  assert.deepEqual(s.rounds.filter(r=>['lightning','extra'].includes(r.kind)).map(r=>r.first),['b','a','b','a']);
   assert.equal(s.rounds.at(-1).first,'b');
 });
 
@@ -54,15 +66,15 @@ test('pergunta anterior recupera relógios pausados; reiniciar repõe o valor',(
   s=applyCommand(s,'reset_round',{},50000);assert.equal(s.timers.a.remainingMs,300000);assert.equal(s.timers.a.epoch,1);
 });
 test('zero extras ou várias extras com alternância e 30 segundos',()=>{
-  let s=applyCommand(initial(),'goto',{index:6},0);
+  let s=applyCommand(initial(),'goto',{index:4},0);
   assert.equal(currentRound(applyCommand(s,'next',{},0)).kind,'closing');
   for(let n=1;n<=8;n++){const previous=currentRound(s).first;s=applyCommand(s,'add_extra',{text:`Pergunta ${n}?`,sourceId:crypto.randomUUID()},0);assert.equal(currentRound(s).kind,'extra');assert.notEqual(currentRound(s).first,previous);assert.equal(s.timers.a.remainingMs,30000);assert.equal(s.timers.a.endsAt,null);}
   s=applyCommand(s,'next',{},0);assert.equal(currentRound(s).kind,'closing');assert.equal(s.timers.a.remainingMs,150000);
 });
-test('participantes diferentes nas cinco perguntas; repetição explícita e extras',()=>{
+test('participantes diferentes nas três perguntas; repetição explícita e extras',()=>{
   let s=applyCommand(initial(),'goto',{index:2},0);s=applyCommand(s,'set_speaker',{team:'a',name:'Elemento 1'},0);s=applyCommand(s,'next',{},0);
   assert.throws(()=>applyCommand(s,'set_speaker',{team:'a',name:'Elemento 1'},0),/já respondeu/);
-  s=applyCommand(s,'set_speaker',{team:'a',name:'Elemento 1',allowRepeat:true},0);s=applyCommand(s,'goto',{index:6},0);s=applyCommand(s,'add_extra',{text:'Extra?'},0);
+  s=applyCommand(s,'set_speaker',{team:'a',name:'Elemento 1',allowRepeat:true},0);s=applyCommand(s,'goto',{index:4},0);s=applyCommand(s,'add_extra',{text:'Extra?'},0);
   assert.doesNotThrow(()=>applyCommand(s,'set_speaker',{team:'a',name:'Elemento 1'},0));
 });
 test('vencedor por ganho positivo em pares completos, não por votos finais',()=>{
@@ -77,7 +89,7 @@ test('empate por ganhos iguais, ausência de ganho, ou uma mantém enquanto outr
   assert.equal(results([{initial:'favor',final:null}]).winner,null);
 });
 test('transições de votação exigem fecho antes da revelação',()=>{
-  let s=applyCommand(initial(),'goto',{index:7},0);s=applyCommand(s,'open_final',{},0);
+  let s=applyCommand(initial(),'goto',{index:5},0);s=applyCommand(s,'open_final',{},0);
   assert.throws(()=>applyCommand(s,'reveal',{},0),/respostas completas/);
   s=applyCommand(s,'close_final',{},0,{votes:[{initial:'neutral',final:'favor'}]});s=applyCommand(s,'show_results',{},0);s=applyCommand(s,'reveal',{},1000);assert.equal(s.revealAt,4000);
 });

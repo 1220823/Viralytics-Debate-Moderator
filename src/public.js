@@ -5,6 +5,8 @@ import { esc, debateView, charts, winner, Sound, tickClocks, bindHeader, toast, 
 const app = document.querySelector('#app'), dialog = document.querySelector('#question-dialog');
 const projector = new URLSearchParams(location.search).get('projecao') === '1';
 const qrDialog = document.querySelector('#presentation-qr-dialog');
+const suggestionsDialog = document.querySelector('#suggestions-dialog');
+let suggestions = [], suggestionsLoading = false, reactionBusy = false, suggestionsSession = '';
 document.body.classList.toggle('presentation-page', projector);
 // Só o computador de apresentação pode ativar e emitir avisos sonoros.
 const sound = projector ? new Sound() : null;
@@ -27,7 +29,7 @@ function presentationPoll(phase) {
   return `<section class="projection-poll ${phase === 'initial' ? 'with-qr' : ''}"><div class="projection-poll-question"><span class="eyebrow">${phase === 'initial' ? 'ANTES DO DEBATE · INQUÉRITO INICIAL' : 'DEPOIS DO DEBATE · INQUÉRITO FINAL'}</span><h1>${esc(TITLE)}</h1><p class="poll-subtitle">Qual é ${phase === 'final' ? 'agora ' : ''}a tua posição?</p><div class="projection-options" aria-label="Opções do inquérito">${Object.entries(CHOICES).map(([k, v]) => `<span class="${k}">${v}</span>`).join('')}</div><div class="poll-participation"><strong data-vote-total>${Number.isFinite(total) ? total : '—'}</strong><span data-vote-label>${total === 1 ? 'pessoa já votou' : 'pessoas já votaram'}</span></div><p class="poll-note">${phase === 'initial' ? 'Participa na página dos espectadores. O debate começa quando a moderação avançar.' : 'Responde na página dos espectadores, no mesmo navegador que usaste no início.'}</p></div>${phase === 'initial' ? `<div class="projection-poll-access"><div id="projection-qr" role="img" aria-label="QR code para aceder à página dos espectadores"></div><a class="spectator-url" href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a><p class="qr-instruction">Lê o QR code com o telemóvel para votar.</p></div>` : ''}</section>`;
 }
 function initialWaiting() {
-  return `<section class="waiting audience-waiting"><span class="eyebrow">VOTO INICIAL REGISTADO</span><h1>O debate está prestes a começar</h1><p>O teu voto foi registado. A moderação dará início ao debate.</p><div class="audience-invitation"><h2>A tua participação continua aqui.</h2><p>Ao longo do debate, poderás sugerir perguntas e partilhar ideias que gostarias de ver debatidas. A equipa de moderação irá ler as sugestões.</p><button class="button primary" id="ask-question" type="button">Sugerir uma pergunta</button></div></section>`;
+  return `<section class="waiting audience-waiting"><span class="eyebrow">VOTO INICIAL REGISTADO</span><h1>O debate está prestes a começar</h1><p>O teu voto foi registado. A moderação dará início ao debate.</p><div class="audience-invitation"><h2>A tua participação continua aqui.</h2><p>Ao longo do debate, poderás sugerir perguntas, consultar as ideias do público e votar nas que gostarias de ver debatidas. A moderação irá acompanhar as sugestões.</p><button class="button primary" id="ask-question" type="button">Ver sugestões ou enviar uma pergunta</button></div></section>`;
 }
 function poll(phase) {
   const s = data.state;
@@ -58,7 +60,9 @@ function render(force = false) {
   else if (s.phase === 'reveal') main = `<section class="winner-stage ${revealDone ? 'revealed' : ''}">${revealDone ? winner(s.result) : '<span class="eyebrow">O MOMENTO DA DECISÃO</span><h1>A equipa vencedora é…</h1><div class="suspense-dots" aria-hidden="true"><i></i><i></i><i></i></div>'}</section>`;
   const popup = projector && s.phase !== 'initial_poll' && Boolean(s.qrVisible);
   const inlineQuestion = !projector && s.phase === 'initial_poll' && Boolean(receipt.initial);
-  app.innerHTML = `<main class="public-main ${projector ? 'projector' : ''}">${main}</main>${projector ? (popup ? '' : presentationControls()) : inlineQuestion ? '' : '<div class="spectator-actions"><button class="button secondary compact" id="ask-question">Enviar uma pergunta</button></div>'}${backend.connection === 'offline' ? '<aside class="public-connection-notice" role="status">Sem ligação · o estado pode estar desatualizado</aside>' : ''}`;
+  const canParticipate = !projector && receiptKey.startsWith(`${s.sessionId}/`) && Boolean(receipt.initial) && !(s.phase === 'final_poll' && !receipt.final);
+  app.innerHTML = `<main class="public-main ${projector ? 'projector' : ''}">${main}</main>${projector ? (popup ? '' : presentationControls()) : canParticipate && !inlineQuestion ? '<div class="spectator-actions"><button class="button primary" id="ask-question">Perguntas do público · Sugerir / votar</button></div>' : ''}${backend.connection === 'offline' ? '<aside class="public-connection-notice" role="status">Sem ligação · o estado pode estar desatualizado</aside>' : ''}`;
+  if (!canParticipate) { suggestionsDialog?.close(); if (dialog.open) dialog.close(); }
   if (qrDialog) {
     if (popup) { qrDialog.innerHTML = `${qrScreen(true)}${presentationControls()}`; if (!qrDialog.open) qrDialog.showModal(); }
     else { if (qrDialog.open) qrDialog.close(); qrDialog.innerHTML = ''; }
@@ -77,8 +81,38 @@ function render(force = false) {
     catch (error) { toast(error.message, true); try { receipt = await backend.voteStatus(token); } catch {} }
     finally { voteBusy = false; render(true); }
   });
-  document.querySelector('#ask-question')?.addEventListener('click', questionDialog);
+  document.querySelector('#ask-question')?.addEventListener('click', openSuggestions);
 }
+function renderSuggestions() {
+  if (!suggestionsDialog.open) return;
+  const list = suggestionsDialog.querySelector('#public-questions');
+  list.innerHTML = suggestionsLoading && !suggestions.length ? '<p>A carregar sugestões…</p>' : suggestions.length ? suggestions.map(q => `<article class="public-question"><div><span class="question-status">${q.status === 'selected' ? 'Selecionada' : q.status === 'debated' ? 'Já debatida' : q.origin === 'moderation' ? 'Sugestão da organização' : 'Sugestão do público'}</span><p>${esc(q.text)}</p></div><div class="reaction-row"><strong class="score" aria-label="Pontuação">${q.score > 0 ? '+' : ''}${q.score} <small>pontos</small></strong><button class="button secondary reaction ${q.myReaction === 1 ? 'active' : ''}" data-question="${esc(q.id)}" data-reaction="1" aria-pressed="${q.myReaction === 1}" ${reactionBusy ? 'disabled' : ''}>Gosto <span>+1 · ${q.likes}</span></button><button class="button secondary reaction ${q.myReaction === -1 ? 'active' : ''}" data-question="${esc(q.id)}" data-reaction="-1" aria-pressed="${q.myReaction === -1}" ${reactionBusy ? 'disabled' : ''}>Não gosto <span>−1 · ${q.dislikes}</span></button></div></article>`).join('') : '<p>Ainda não há sugestões. Podes enviar a primeira.</p>';
+}
+async function loadSuggestions() {
+  if (suggestionsLoading || !suggestionsDialog.open || !data) return;
+  const session = data.state.sessionId; suggestionsLoading = true;
+  try { const answer = await backend.questions(token); if (data.state.sessionId === session) { suggestions = answer; suggestionsSession = session; renderSuggestions(); } }
+  catch (e) { toast('Não foi possível atualizar as sugestões. ' + e.message, true); }
+  finally { suggestionsLoading = false; }
+}
+function openSuggestions() {
+  if (!receipt.initial || projector) return;
+  if (suggestionsSession !== data.state.sessionId) suggestions = [];
+  suggestionsDialog.innerHTML = '<div class="dialog-header"><h2 id="suggestions-title">Perguntas do público</h2><button class="icon-button close-dialog" aria-label="Fechar">×</button></div><p>Vê as ideias já recebidas antes de sugerires outra. Gosto vale +1 e não gosto vale −1. Podes mudar a tua reação ou carregar de novo para a retirar.</p><button class="button primary suggest-new" id="new-question">Enviar uma pergunta</button><div id="public-questions" class="public-questions"></div>';
+  suggestionsDialog.querySelector('.close-dialog').onclick = () => suggestionsDialog.close();
+  suggestionsDialog.querySelector('#new-question').onclick = () => { suggestionsDialog.close(); questionDialog(); };
+  suggestionsDialog.showModal(); renderSuggestions(); loadSuggestions();
+}
+suggestionsDialog.addEventListener('click', async e => {
+  const button = e.target.closest('[data-reaction]'); if (!button || button.disabled || reactionBusy) return;
+  const q = suggestions.find(q => q.id === button.dataset.question); if (!q) return;
+  const value = Number(button.dataset.reaction), session = data.state.sessionId;
+  reactionBusy = true; renderSuggestions();
+  try { const answer = await backend.reactQuestion(token, q.id, q.myReaction === value ? 0 : value); if (data.state.sessionId === session) suggestions = answer; }
+  catch (e) { toast(e.message, true); }
+  finally { reactionBusy = false; renderSuggestions(); }
+});
+setInterval(() => { if (suggestionsDialog.open) loadSuggestions(); }, 5000);
 function questionDialog() {
   let text = '', id = crypto.randomUUID(), submitting = false;
   function edit() {
@@ -88,13 +122,13 @@ function questionDialog() {
   }
   function bindClose() { dialog.querySelectorAll('.close-dialog').forEach((b) => b.onclick = () => { if (!submitting) dialog.close(); }); }
   function confirm() {
-    dialog.innerHTML = `<div class="dialog-header"><h2 id="question-title">Confirmar envio</h2><button class="icon-button close-dialog" aria-label="Fechar">×</button></div><p>Esta pergunta será enviada apenas à equipa de moderação.</p><blockquote>${esc(text)}</blockquote><div class="dialog-actions"><button class="button secondary" id="question-back">Voltar a editar</button><button class="button secondary close-dialog">Cancelar</button><button class="button primary" id="question-send">Confirmar envio</button></div>`;
+    dialog.innerHTML = `<div class="dialog-header"><h2 id="question-title">Confirmar envio</h2><button class="icon-button close-dialog" aria-label="Fechar">×</button></div><p>A tua pergunta ficará visível aos espectadores e à moderação. O público poderá reagir à sugestão.</p><blockquote>${esc(text)}</blockquote><div class="dialog-actions"><button class="button secondary" id="question-back">Voltar a editar</button><button class="button secondary close-dialog">Cancelar</button><button class="button primary" id="question-send">Confirmar envio</button></div>`;
     dialog.querySelector('#question-back').onclick = edit; bindClose();
     dialog.querySelector('#question-send').onclick = async () => {
       if (submitting) return; submitting = true;
       dialog.querySelectorAll('button').forEach((b) => b.disabled = true);
       dialog.querySelector('#question-send').textContent = 'A enviar…';
-      try { await backend.submitQuestion(token, text, id); dialog.close(); toast('Pergunta enviada. Obrigado pela tua participação!'); }
+      try { await backend.submitQuestion(token, text, id); dialog.close(); toast('Pergunta enviada. Obrigado pela tua participação!'); openSuggestions(); }
       catch (e) { toast(e.message, true); submitting = false; confirm(); }
       finally { submitting = false; }
     };

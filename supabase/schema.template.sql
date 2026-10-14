@@ -20,6 +20,13 @@ create table if not exists debate_private.questions (
   status text not null default 'new' check(status in ('new','selected','debated','discarded')),
   created_at timestamptz not null default now()
 );
+alter table debate_private.questions add column if not exists origin text not null default 'audience' check(origin in ('audience','moderation'));
+create table if not exists debate_private.question_reactions (
+ question_id uuid not null references debate_private.questions(id) on delete cascade,
+ token_hash text not null, value smallint not null check(value in (-1,1)),
+ primary key(question_id,token_hash)
+);
+alter table debate_private.question_reactions enable row level security;
 create index if not exists debate_questions_session on debate_private.questions(session_id,created_at desc);
 create table if not exists debate_private.actions (
   id bigint generated always as identity primary key, request_id uuid not null unique,
@@ -57,7 +64,7 @@ create or replace function debate_private.paused_timer(t jsonb,n bigint) returns
  select t||jsonb_build_object('remainingMs',debate_private.remaining(t,n),'endsAt',null)
 $$;
 create or replace function debate_private.snapshot(s jsonb,n bigint) returns jsonb language sql immutable set search_path='' as $$
- select jsonb_build_object('timers',jsonb_build_object('a',debate_private.paused_timer(s->'timers'->'a',n),'b',debate_private.paused_timer(s->'timers'->'b',n)), 'penalties',s->'penalties','speakers',s->'speakers')
+ select jsonb_build_object('timers',jsonb_build_object('a',debate_private.paused_timer(s->'timers'->'a',n),'b',debate_private.paused_timer(s->'timers'->'b',n)), 'penalties',s->'penalties','speakers',s->'speakers','dimmed',coalesce(s->'dimmed','{"a":false,"b":false}'::jsonb))
 $$;
 create or replace function debate_private.goto_round(s jsonb,i integer,n bigint) returns jsonb language plpgsql immutable set search_path='' as $$
 declare old_id text; r jsonb; saved jsonb;
@@ -67,7 +74,7 @@ begin
  s:=jsonb_set(s,array['history',old_id],debate_private.snapshot(s,n));
  s:=jsonb_set(s,'{roundIndex}',to_jsonb(i)); r:=s->'rounds'->i; saved:=s->'history'->(r->>'id');
  if saved is not null then s:=s||saved;
- else s:=s||jsonb_build_object('timers',jsonb_build_object('a',jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',0),'b',jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',0)),'penalties',jsonb_build_object('a',0,'b',0),'speakers',jsonb_build_object('a','','b','')); end if;
+ else s:=s||jsonb_build_object('timers',jsonb_build_object('a',jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',0),'b',jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',0)),'penalties',jsonb_build_object('a',0,'b',0),'speakers',jsonb_build_object('a','','b',''),'dimmed',jsonb_build_object('a',false,'b',false)); end if;
  return s;
 end $$;
 create or replace function debate_private.publish(s jsonb,v bigint) returns void language plpgsql set search_path='' as $$
@@ -94,6 +101,44 @@ begin
  return jsonb_build_object('paired',paired,'before',bef,'after',aft,'gains',jsonb_build_object('favor',ga,'contra',gb),'winner',winner,'totalInitial',ti,'totalFinal',tf);
 end $$;
 
+create or replace function debate_private.seed_questions(sid uuid) returns void language plpgsql set search_path='' as $$
+declare item text;
+begin
+ for item in select value from jsonb_array_elements_text('__SUGGESTION_SEEDS__'::jsonb) loop
+  if not exists(select 1 from debate_private.questions where session_id=sid and lower(regexp_replace(btrim(text),'\s+',' ','g'))=lower(regexp_replace(btrim(item),'\s+',' ','g'))) then
+   insert into debate_private.questions(id,session_id,token_hash,text,origin) values(gen_random_uuid(),sid,repeat('0',64),item,'moderation');
+  end if;
+ end loop;
+end $$;
+create or replace function debate_private.questions_for(sid uuid,h text,include_discarded boolean default false) returns jsonb language sql stable set search_path='' as $$
+ select coalesce(jsonb_agg(jsonb_build_object('id',id,'text',text,'status',status,'origin',origin,'createdAt',floor(extract(epoch from created_at)*1000),'score',score,'likes',likes,'dislikes',dislikes,'myReaction',my_reaction) order by score desc,created_at,id),'[]'::jsonb)
+ from (select q.*, coalesce(sum(r.value),0) score, count(*) filter(where r.value=1) likes, count(*) filter(where r.value=-1) dislikes, coalesce(max(r.value) filter(where r.token_hash=h),0) my_reaction
+  from debate_private.questions q left join debate_private.question_reactions r on r.question_id=q.id
+  where q.session_id=sid and (include_discarded or q.status<>'discarded') group by q.id) ranked
+$$;
+create or replace function public.debate_questions(p_session uuid,p_token text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare h text; s jsonb;
+begin
+ h:=debate_private.token_hash(p_token);
+ select state into s from debate_private.control where id=1;
+ if (s->>'sessionId')::uuid<>p_session then raise exception 'Esta sessão de debate terminou.'; end if;
+ return debate_private.questions_for(p_session,h);
+end $$;
+create or replace function public.debate_react_question(p_session uuid,p_token text,p_id uuid,p_value integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare h text; s jsonb; v bigint;
+begin
+ h:=debate_private.token_hash(p_token);
+ if p_value is null or p_value not in (-1,0,1) then raise exception 'Reação inválida.'; end if;
+ select state,version into s,v from debate_private.control where id=1 for update;
+ if (s->>'sessionId')::uuid<>p_session then raise exception 'Esta sessão de debate terminou.'; end if;
+ if not exists(select 1 from debate_private.votes where session_id=p_session and token_hash=h and initial_choice is not null) then raise exception 'Vota no inquérito inicial para participar.'; end if;
+ if not exists(select 1 from debate_private.questions where id=p_id and session_id=p_session and status<>'discarded') then raise exception 'Pergunta indisponível.'; end if;
+ if p_value=0 then delete from debate_private.question_reactions where question_id=p_id and token_hash=h;
+ else insert into debate_private.question_reactions(question_id,token_hash,value) values(p_id,h,p_value) on conflict(question_id,token_hash) do update set value=excluded.value; end if;
+ perform debate_private.publish(s,v);
+ return debate_private.questions_for(p_session,h);
+end $$;
+
 create or replace function public.debate_get_state() returns jsonb language sql security definer set search_path='' as $$
  select jsonb_build_object('state',state,'version',version,'serverNow',debate_private.now_ms()) from public.debate_state where id='main'
 $$;
@@ -103,7 +148,7 @@ declare s jsonb; v bigint; qs jsonb; stats jsonb;
 begin
  if not debate_private.is_mod() then raise exception 'Sem autorização de moderação.' using errcode='42501'; end if;
  select state,version into s,v from debate_private.control where id=1;
- select coalesce(jsonb_agg(jsonb_build_object('id',id,'text',text,'status',status,'createdAt',floor(extract(epoch from created_at)*1000)) order by created_at desc),'[]') into qs from debate_private.questions where session_id=(s->>'sessionId')::uuid;
+ qs:=debate_private.questions_for((s->>'sessionId')::uuid,null,true);
  select jsonb_build_object('initial',count(*) filter(where initial_choice is not null),'final',count(*) filter(where final_choice is not null),'paired',count(*) filter(where initial_choice is not null and final_choice is not null)) into stats from debate_private.votes where session_id=(s->>'sessionId')::uuid;
  return jsonb_build_object('state',s,'version',v,'serverNow',debate_private.now_ms(),'questions',qs,'stats',stats);
 end $$;
@@ -137,17 +182,19 @@ begin
  return public.debate_vote_status(p_session,p_token);
 end $$;
 create or replace function public.debate_submit_question(p_session uuid,p_token text,p_id uuid,p_text text) returns uuid language plpgsql security definer set search_path='' as $$
-declare h text; s jsonb;
+declare h text; s jsonb; v bigint;
 begin
  h:=debate_private.token_hash(p_token);
  if p_text is null or char_length(btrim(p_text)) not between 1 and 500 then raise exception 'A pergunta deve ter entre 1 e 500 caracteres.'; end if;
- select state into s from debate_private.control where id=1 for share;
+ select state,version into s,v from debate_private.control where id=1 for update;
  if (s->>'sessionId')::uuid<>p_session then raise exception 'Esta sessão de debate terminou.'; end if;
- perform pg_advisory_xact_lock(hashtextextended(h,0));
+ if not exists(select 1 from debate_private.votes where session_id=p_session and token_hash=h and initial_choice is not null) then raise exception 'Vota no inquérito inicial para participar.'; end if;
  if exists(select 1 from debate_private.questions where id=p_id and token_hash=h and session_id=p_session) then return p_id; end if;
+ if exists(select 1 from debate_private.questions where session_id=p_session and lower(regexp_replace(btrim(text),'\s+',' ','g'))=lower(regexp_replace(btrim(p_text),'\s+',' ','g'))) then raise exception 'Esta pergunta já foi recebida. Podes reagir à sugestão existente.'; end if;
  if exists(select 1 from debate_private.questions where token_hash=h and created_at>clock_timestamp()-interval '30 seconds') then raise exception 'Espera 30 segundos antes de enviar outra pergunta.'; end if;
  if (select count(*) from debate_private.questions where session_id=p_session and created_at>clock_timestamp()-interval '1 minute')>=120 then raise exception 'Muitas perguntas neste momento. Tenta novamente dentro de um minuto.'; end if;
  insert into debate_private.questions(id,session_id,token_hash,text) values(p_id,p_session,h,btrim(p_text));
+ perform debate_private.publish(s,v);
  return p_id;
 end $$;
 
@@ -160,14 +207,27 @@ begin
  if v<>p_version then raise exception 'O estado mudou noutro dispositivo. Atualiza e tenta novamente.' using errcode='40001'; end if;
  n:=debate_private.now_ms(); sid:=(s->>'sessionId')::uuid; prev:=s||debate_private.snapshot(s,n);
  idx:=(s->>'roundIndex')::integer; r:=s->'rounds'->idx; count_rounds:=jsonb_array_length(s->'rounds');
- if p_action in ('start','pause','start_all','pause_all','adjust','set_time','penalty','reset_round','goto','next','previous','add_extra','set_speaker') and s->>'phase'<>'debate' then raise exception 'Este controlo está disponível durante o debate.'; end if;
- if p_action in ('start','pause','adjust','set_time','penalty','set_speaker') then k:=p_payload->>'team'; if k is null or k not in ('a','b') then raise exception 'Equipa inválida.'; end if; end if;
+ if p_action in ('start','pause','start_all','pause_all','toggle_timer','toggle_all','toggle_dim','adjust','set_time','penalty','reset_round','goto','next','previous','add_extra','set_speaker') and s->>'phase'<>'debate' then raise exception 'Este controlo está disponível durante o debate.'; end if;
+ if p_action in ('start','pause','toggle_timer','toggle_dim','adjust','set_time','penalty','set_speaker') then k:=p_payload->>'team'; if k is null or k not in ('a','b') then raise exception 'Equipa inválida.'; end if; end if;
  case p_action
  when 'start_debate' then
   if s->>'phase'<>'initial_poll' then raise exception 'A votação inicial já terminou.'; end if;
   s:=jsonb_set(s,'{phase}','"debate"'); s:=jsonb_set(s,'{qrVisible}','false');
  when 'toggle_qr' then
   s:=jsonb_set(s,'{qrVisible}',to_jsonb(not coalesce((s->>'qrVisible')::boolean,false)));
+ when 'toggle_dim' then
+  if r->>'kind' not in ('lightning','extra') then raise exception 'Atenuar cartões está disponível nas rondas relâmpago.'; end if;
+  if s->'dimmed' is null then s:=jsonb_set(s,'{dimmed}','{"a":false,"b":false}'); end if;
+  s:=jsonb_set(s,array['dimmed',k],to_jsonb(not coalesce((s->'dimmed'->>k)::boolean,false)));
+ when 'toggle_timer','toggle_all' then
+  if p_action='toggle_all' then keys:=array['a','b']; else keys:=array[k]; end if;
+  running:=false;
+  foreach k in array keys loop running:=running or s->'timers'->k->>'endsAt' is not null; end loop;
+  foreach k in array keys loop
+   t:=s->'timers'->k;
+   if running then t:=debate_private.paused_timer(t,n); else t:=jsonb_set(t,'{endsAt}',to_jsonb(n+(t->>'remainingMs')::bigint)); end if;
+   s:=jsonb_set(s,array['timers',k],t);
+  end loop;
  when 'start','start_all','pause','pause_all' then
   if p_action in ('start_all','pause_all') then keys:=array['a','b']; else keys:=array[k]; end if;
   foreach k in array keys loop
@@ -192,7 +252,7 @@ begin
   s:=jsonb_set(s,array['timers',k],t);
  when 'reset_round' then
   foreach k in array array['a','b'] loop s:=jsonb_set(s,array['timers',k],jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',(s->'timers'->k->>'epoch')::integer+1)); end loop;
-  s:=s||jsonb_build_object('penalties',jsonb_build_object('a',0,'b',0),'speakers',jsonb_build_object('a','','b',''));
+  s:=s||jsonb_build_object('penalties',jsonb_build_object('a',0,'b',0),'speakers',jsonb_build_object('a','','b',''),'dimmed',jsonb_build_object('a',false,'b',false));
  when 'goto','next','previous' then
   if p_action='goto' then idx:=(p_payload->>'index')::integer; elsif p_action='next' then idx:=idx+1; else idx:=idx-1; end if;
   s:=debate_private.goto_round(s,idx,n);
@@ -246,14 +306,14 @@ begin
  when 'reveal' then
   if s->>'phase'<>'results' or coalesce((s->'result'->>'paired')::integer,0)=0 then raise exception 'São necessárias respostas completas para revelar um vencedor.'; end if;
   s:=s||jsonb_build_object('phase','reveal','revealAt',n+3000);
- when 'reset_event' then s:=debate_private.fresh_state()||jsonb_build_object('teams',s->'teams');
+ when 'reset_event' then s:=debate_private.fresh_state()||jsonb_build_object('teams',s->'teams'); perform debate_private.seed_questions((s->>'sessionId')::uuid);
  when 'question_status' then
   if p_payload->>'status' is null or p_payload->>'status' not in ('new','selected','debated','discarded') then raise exception 'Estado da pergunta inválido.'; end if;
   update debate_private.questions set status=p_payload->>'status' where id=(p_payload->>'id')::uuid and session_id=sid;
   if not found then raise exception 'Pergunta não encontrada.'; end if;
  when 'undo' then
   select * into last_action from debate_private.actions where session_id=sid order by id desc limit 1;
-  if last_action.action is null or last_action.action not in ('start','pause','start_all','pause_all','adjust','set_time','penalty','reset_round','goto','next','previous','add_extra','set_speaker','configure') then raise exception 'Esta transição não pode ser desfeita.'; end if;
+  if last_action.action is null or last_action.action not in ('start','pause','start_all','pause_all','toggle_timer','toggle_all','toggle_dim','adjust','set_time','penalty','reset_round','goto','next','previous','add_extra','set_speaker','configure') then raise exception 'Esta transição não pode ser desfeita.'; end if;
   if last_action.action='add_extra' then update debate_private.questions set status=coalesce(last_action.detail->>'questionPreviousStatus','new') where id=(last_action.detail->>'sourceId')::uuid; end if;
   s:=last_action.previous_state;
  else raise exception 'Ação desconhecida.';
@@ -267,13 +327,14 @@ end $$;
 
 -- Fechar o EXECUTE por defeito antes de conceder apenas a API pública necessária.
 do $$ declare f record; begin
- for f in select oid::regprocedure sig from pg_proc where pronamespace='public'::regnamespace and proname in ('debate_get_state','debate_is_moderator','debate_admin_data','debate_vote_status','debate_vote','debate_submit_question','debate_command') loop
+ for f in select oid::regprocedure sig from pg_proc where pronamespace='public'::regnamespace and proname in ('debate_get_state','debate_is_moderator','debate_admin_data','debate_vote_status','debate_vote','debate_submit_question','debate_questions','debate_react_question','debate_command') loop
   execute format('revoke all on function %s from public, anon, authenticated',f.sig);
  end loop;
 end $$;
-grant execute on function public.debate_get_state(), public.debate_vote_status(uuid,text), public.debate_vote(uuid,text,text,text), public.debate_submit_question(uuid,text,uuid,text) to anon,authenticated;
+grant execute on function public.debate_get_state(), public.debate_vote_status(uuid,text), public.debate_vote(uuid,text,text,text), public.debate_submit_question(uuid,text,uuid,text), public.debate_questions(uuid,text), public.debate_react_question(uuid,text,uuid,integer) to anon,authenticated;
 grant execute on function public.debate_is_moderator(), public.debate_admin_data(), public.debate_command(text,jsonb,bigint,uuid) to authenticated;
 insert into debate_private.control(id,state) values(1,debate_private.fresh_state()) on conflict(id) do nothing;
+select debate_private.seed_questions((state->>'sessionId')::uuid) from debate_private.control where id=1;
 do $$ declare s jsonb; v bigint; begin select state,version into s,v from debate_private.control where id=1; perform debate_private.publish(s,v); end $$;
 do $$ begin
  if exists(select 1 from pg_publication where pubname='supabase_realtime') and not exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='debate_state') then alter publication supabase_realtime add table public.debate_state; end if;

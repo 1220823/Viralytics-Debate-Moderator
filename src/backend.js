@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { applyCommand, copy, newState, pausedState, UNDOABLE } from './core.js';
+import { seedQuestions, questionKey, sortQuestions } from './seeds.js';
 import { validateConfig } from './config.js';
 
 const STORAGE = 'superinteligencia-demo-v1';
@@ -31,7 +32,7 @@ export class Backend {
     const raw = localStorage.getItem(STORAGE);
     if (raw) return JSON.parse(raw);
     const data = { state: newState(), version: 1, votes: [], questions: [], actions: [] };
-    localStorage.setItem(STORAGE, JSON.stringify(data)); return data;
+    data.questions = seedQuestions(data.state.sessionId); localStorage.setItem(STORAGE, JSON.stringify(data)); return data;
   }
   demoWrite(data) { localStorage.setItem(STORAGE, JSON.stringify(data)); this.channel?.postMessage('changed'); }
   async rpc(name, args = {}) { const { data, error } = await this.client.rpc(name, args); if (error) throw Error(error.message); return data; }
@@ -49,7 +50,7 @@ export class Backend {
         const d = this.demoRead(), votes = d.votes.filter((v) => v.sessionId === d.state.sessionId);
         const data = { state: role ? d.state : publicCopy(d.state), version: d.version, serverNow: Date.now() };
         if (!role) data.state.voteCounts = { initial: votes.filter((v) => v.initial).length, final: votes.filter((v) => v.final).length };
-        if (role) { data.questions = d.questions.filter((q) => q.sessionId === d.state.sessionId); data.stats = { initial: votes.filter((v) => v.initial).length, final: votes.filter((v) => v.final).length, paired: votes.filter((v) => v.initial && v.final).length }; }
+        if (role) { data.questions = this.demoQuestions(d); data.stats = { initial: votes.filter((v) => v.initial).length, final: votes.filter((v) => v.final).length, paired: votes.filter((v) => v.initial && v.final).length }; }
         this.accept(data, start); return data;
       }
       const data = await this.rpc(role ? 'debate_admin_data' : 'debate_get_state');
@@ -100,11 +101,35 @@ export class Backend {
     if (!v[phase]) v[phase] = choice;
     this.demoWrite(d); await this.refresh(); return { initial: v.initial, final: v.final };
   }
+  demoQuestions(d, token) {
+    return sortQuestions(d.questions.filter(q => q.sessionId === d.state.sessionId).map(q => {
+      const values = Object.values(q.reactions || {});
+      return { id: q.id, text: q.text, status: q.status, origin: q.origin || 'audience', createdAt: q.createdAt, score: values.reduce((a,b)=>a+b,0), likes: values.filter(v=>v===1).length, dislikes: values.filter(v=>v===-1).length, myReaction: q.reactions?.[token] || 0 };
+    }));
+  }
+  async questions(token) {
+    if (!isDemo) return this.rpc('debate_questions', { p_session: this.latest.state.sessionId, p_token: token });
+    return this.demoQuestions(this.demoRead(), token).filter(q=>q.status!=='discarded');
+  }
+  async reactQuestion(token, id, value) {
+    if (![-1,0,1].includes(value)) throw Error('Reação inválida.');
+    if (!isDemo) return this.rpc('debate_react_question', { p_session: this.latest.state.sessionId, p_token: token, p_id: id, p_value: value });
+    const d=this.demoRead();
+    if (d.state.sessionId !== this.latest.state.sessionId) throw Error('Esta sessão de debate terminou.');
+    if (!d.votes.some(v=>v.sessionId===d.state.sessionId && v.token===token && v.initial)) throw Error('Vota no inquérito inicial para participar.');
+    const q=d.questions.find(q=>q.sessionId===d.state.sessionId && q.id===id && q.status!=='discarded');
+    if (!q) throw Error('Pergunta indisponível.');
+    q.reactions ||= {}; if(value===0) delete q.reactions[token]; else q.reactions[token]=value;
+    this.demoWrite(d); return this.questions(token);
+  }
   async submitQuestion(token, text, id) {
     const sessionId = this.latest.state.sessionId;
     if (!isDemo) return this.rpc('debate_submit_question', { p_session: sessionId, p_token: token, p_id: id, p_text: text });
     const d = this.demoRead();
-    if (d.questions.some((q) => q.id === id && q.token === token)) return id;
+    if (d.state.sessionId !== sessionId) throw Error('Esta sessão de debate terminou.');
+    if (!d.votes.some(v=>v.sessionId===sessionId && v.token===token && v.initial)) throw Error('Vota no inquérito inicial para participar.');
+    if (d.questions.some((q) => q.id === id && q.token === token && q.sessionId === sessionId)) return id;
+    if (d.questions.some(q=>q.sessionId===sessionId && questionKey(q.text)===questionKey(text))) throw Error('Esta pergunta já foi recebida. Podes reagir à sugestão existente.');
     if (d.questions.some((q) => q.token === token && Date.now() - q.createdAt < 30000)) throw Error('Espera 30 segundos antes de enviar outra pergunta.');
     if (!text.trim() || text.length > 500) throw Error('A pergunta deve ter entre 1 e 500 caracteres.');
     d.questions.push({ id, sessionId, token, text: text.trim(), status: 'new', createdAt: Date.now() }); this.demoWrite(d); return id;
@@ -134,6 +159,7 @@ export class Backend {
       }
       d.state = applyCommand(d.state, action, payload, this.now(), { votes: d.votes.filter((v) => v.sessionId === d.state.sessionId) });
     }
+    if (action === 'reset_event') d.questions.push(...seedQuestions(d.state.sessionId));
     d.actions.push({ id: requestId, action, previous: prev, payload, detail, sessionId: prev.sessionId }); d.version++;
     this.demoWrite(d); return this.refresh();
   }

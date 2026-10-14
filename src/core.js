@@ -1,7 +1,7 @@
 export const TITLE = 'Superinteligência: progresso ou ameaça?';
 export const SUBTITLE = 'Superintelligence and the future of humanity: Science or Speculation?';
 export const CHOICES = { favor: 'A favor', neutral: 'Neutro', contra: 'Contra' };
-export const UNDOABLE = ['start', 'pause', 'start_all', 'pause_all', 'adjust', 'set_time', 'penalty', 'reset_round', 'goto', 'next', 'previous', 'add_extra', 'set_speaker', 'configure'];
+export const UNDOABLE = ['start', 'pause', 'start_all', 'pause_all', 'toggle_timer', 'toggle_all', 'toggle_dim', 'adjust', 'set_time', 'penalty', 'reset_round', 'goto', 'next', 'previous', 'add_extra', 'set_speaker', 'configure'];
 export const copy = (value) => structuredClone(value);
 export function timer(ms, epoch = 0) { return { remainingMs: ms, endsAt: null, epoch }; }
 export function remaining(t, now) { return t.endsAt === null ? t.remainingMs : t.endsAt - now; }
@@ -18,19 +18,17 @@ export function initialRounds() {
       'Será seguro criar uma tecnologia cujas capacidades e comportamentos futuros não conseguimos prever?',
       'Poderá a superinteligência ajudar a humanidade a ultrapassar por completo limitações biológicas e cognitivas?',
       'Poderá a superinteligência ser a ferramenta mais poderosa alguma vez criada para resolver problemas da humanidade?',
-      'Poderá uma superinteligência tomar decisões mais eficazes do que os seres humanos em problemas extremamente complexos?',
-      'Será que os potenciais benefícios da superinteligência justificam os riscos associados ao seu desenvolvimento?',
-    ].map((title, i) => ({ id: `lightning-${i + 1}`, kind: 'lightning', title, durationMs: 30000, first: i % 2 ? 'b' : 'a', label: `Ronda Relâmpago · ${i + 1} de 5` })),
+    ].map((title, i) => ({ id: `lightning-${i + 1}`, kind: 'lightning', title, durationMs: 30000, first: i % 2 ? 'b' : 'a', label: `Ronda Relâmpago · ${i + 1} de 3` })),
     { id: 'closing', kind: 'closing', title: TITLE, durationMs: 150000, first: 'a', label: 'Closing statements' },
   ];
 }
 export function newState(now = Date.now(), sessionId = crypto.randomUUID()) {
-  return { sessionId, phase: 'initial_poll', qrVisible: false, roundIndex: 0, rounds: initialRounds(), timers: { a: timer(300000), b: timer(300000) }, penalties: { a: 0, b: 0 }, speakers: { a: '', b: '' }, history: {}, teams: { a: { label: 'A favor', stance: 'Progresso', members: Array.from({ length: 5 }, (_, i) => `Elemento ${i + 1}`) }, b: { label: 'Contra', stance: 'Ameaça', members: Array.from({ length: 5 }, (_, i) => `Elemento ${i + 1}`) } }, result: null, revealAt: null, createdAt: now };
+  return { sessionId, phase: 'initial_poll', qrVisible: false, dimmed: { a: false, b: false }, roundIndex: 0, rounds: initialRounds(), timers: { a: timer(300000), b: timer(300000) }, penalties: { a: 0, b: 0 }, speakers: { a: '', b: '' }, history: {}, teams: { a: { label: 'A favor', stance: 'Progresso', members: Array.from({ length: 5 }, (_, i) => `Elemento ${i + 1}`) }, b: { label: 'Contra', stance: 'Ameaça', members: Array.from({ length: 5 }, (_, i) => `Elemento ${i + 1}`) } }, result: null, revealAt: null, createdAt: now };
 }
 export function currentRound(state) { return state.rounds[state.roundIndex]; }
 export function roundLabel(state) { const r = currentRound(state); return `${['lightning', 'extra'].includes(r.kind) ? '⚡ ' : ''}${r.label}`; }
 export function snapshot(state, now) {
-  return { timers: { a: pauseTimer(state.timers.a, now), b: pauseTimer(state.timers.b, now) }, penalties: copy(state.penalties), speakers: copy(state.speakers) };
+  return { timers: { a: pauseTimer(state.timers.a, now), b: pauseTimer(state.timers.b, now) }, penalties: copy(state.penalties), speakers: copy(state.speakers), dimmed: copy(state.dimmed || { a: false, b: false }) };
 }
 export function pausedState(state, now) { const s = copy(state); s.timers = snapshot(s, now).timers; return s; }
 export function usedSpeakers(state, team) {
@@ -53,16 +51,28 @@ function switchRound(s, index, now) {
   s.history[currentRound(s).id] = snapshot(s, now);
   s.roundIndex = index;
   const saved = s.history[currentRound(s).id];
-  Object.assign(s, saved ? copy(saved) : { timers: { a: timer(currentRound(s).durationMs), b: timer(currentRound(s).durationMs) }, penalties: { a: 0, b: 0 }, speakers: { a: '', b: '' } });
+  Object.assign(s, saved ? copy(saved) : { timers: { a: timer(currentRound(s).durationMs), b: timer(currentRound(s).durationMs) }, penalties: { a: 0, b: 0 }, speakers: { a: '', b: '' }, dimmed: { a: false, b: false } });
 }
 export function applyCommand(state, action, p = {}, now = Date.now(), context = {}) {
   const s = copy(state);
+  s.dimmed ||= { a: false, b: false };
+  if (['toggle_timer', 'toggle_all', 'toggle_dim'].includes(action)) requireDebate(s);
   if (['start', 'pause', 'start_all', 'pause_all', 'adjust', 'set_time', 'penalty', 'reset_round', 'goto', 'next', 'previous', 'add_extra', 'set_speaker'].includes(action)) requireDebate(s);
   switch (action) {
     case 'start_debate':
       if (s.phase !== 'initial_poll') throw Error('A votação inicial já terminou.');
       s.phase = 'debate'; s.qrVisible = false; break;
     case 'toggle_qr': s.qrVisible = !s.qrVisible; break;
+    case 'toggle_dim': {
+      if (!['lightning', 'extra'].includes(currentRound(s).kind)) throw Error('Atenuar cartões está disponível nas rondas relâmpago.');
+      const k = teamKey(p.team); s.dimmed[k] = !s.dimmed[k]; break;
+    }
+    case 'toggle_timer': case 'toggle_all': {
+      const keys = action === 'toggle_all' ? ['a', 'b'] : [teamKey(p.team)];
+      const running = keys.some(k => s.timers[k].endsAt !== null);
+      for (const k of keys) s.timers[k] = running ? pauseTimer(s.timers[k], now) : { ...s.timers[k], endsAt: now + s.timers[k].remainingMs };
+      break;
+    }
     case 'start': case 'start_all':
       for (const k of action === 'start_all' ? ['a', 'b'] : [teamKey(p.team)]) if (s.timers[k].endsAt === null) s.timers[k].endsAt = now + s.timers[k].remainingMs;
       break;
@@ -86,7 +96,7 @@ export function applyCommand(state, action, p = {}, now = Date.now(), context = 
     case 'reset_round': {
       const duration = currentRound(s).durationMs;
       s.timers = { a: timer(duration, s.timers.a.epoch + 1), b: timer(duration, s.timers.b.epoch + 1) };
-      s.penalties = { a: 0, b: 0 }; s.speakers = { a: '', b: '' }; break;
+      s.penalties = { a: 0, b: 0 }; s.speakers = { a: '', b: '' }; s.dimmed = { a: false, b: false }; break;
     }
     case 'goto': switchRound(s, Number(p.index), now); break;
     case 'previous': switchRound(s, s.roundIndex - 1, now); break;

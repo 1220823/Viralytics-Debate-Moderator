@@ -1,0 +1,44 @@
+/* Apresentação centrada em ecrãs grandes, com margem para os controlos. */
+.public-main.projector { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; gap: 24px; padding: 48px 4vw 76px; }
+.projector > *, .debate-stage { width: 100%; }
+.projector .projection-poll { min-height: auto; }
+.projector .waiting, .projector .winner-stage { margin: 0 auto; padding: 28px 20px; min-height: auto; }
+.projector .question-card h1 { text-align: center; max-width: 1250px; margin: auto; }
+.projector .question-card p { text-align: center; }
+.results-intro, .results-intro h1 { text-align: center; margin-inline: auto; }
+.projector .results-intro { margin-block: 0; }
+.projector .projection-poll:not(.with-qr) { text-align: center; }
+.projector .projection-poll:not(.with-qr) .projection-options, .projector .projection-poll:not(.with-qr) .poll-participation { justify-content: center; }
+.speaker-display { text-align: center; margin-top: 24px; padding-top: 18px; border-top: 1px solid #ffffff50; }
+.speaker-display > span { display: block; font-size: 11px; letter-spacing: .12em; color: #ffffffe0; }
+.speaker-display > strong { display: block; font-size: clamp(1.7rem, 3vw, 2.6rem); line-height: 1.2; margin-top: 8px; overflow-wrap: anywhere; }
+.projector .speaker-display > strong { font-size: clamp(2rem, 3.8vw, 3.6rem); }
+.timer-card.dimmed { opacity: .45; box-shadow: none; }
+.moderator-page .timer-card.dimmed { opacity: 1; }
+.moderator-page .timer-card.dimmed .timer-head::after { content: 'Cartão atenuado'; font-size: 11px; color: white; }
+.clock-controls .timer-toggle { grid-column: 1 / -1; font-size: 14px; padding: 14px; background: white; color: #0f172a; }
+.global-controls .timer-toggle { background: white; color: #0f172a; border-color: #94a3b8; box-shadow: 0 2px 8px #0f172a12; }
+.global-controls .timer-toggle:hover:not(:disabled), .clock-controls .timer-toggle:hover:not(:disabled) { background: #f1f5f9; }
+.spectator-actions .button { background: #0f172a; color: white; font-size: 15px; padding: 16px 22px; box-shadow: 0 5px 18px #0f172a30; border: 2px solid white; }
+.suggestions-dialog { width: min(800px, calc(100% - 32px)); }
+.suggestions-dialog > p { color: var(--muted); line-height: 1.6; margin: 12px 0 20px; }
+.suggest-new { margin-bottom: 20px; }
+.public-questions { display: grid; gap: 14px; }
+.public-question { padding: 20px; border: 1px solid var(--line); border-radius: 12px; }
+.public-question p { line-height: 1.5; margin: 12px 0 18px; overflow-wrap: anywhere; }
+.reaction-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.reaction-row .score { margin-right: auto; font-size: 22px; white-space: nowrap; }
+.score small { font-weight: 400; font-size: 12px; }
+.reaction { flex-direction: column; gap: 4px; min-width: 102px; }
+.reaction span { font-size: 11px; font-weight: 400; }
+.question-score { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 10px; }
+.question-score strong { font-size: 16px; }
+.question-score span { font-size: 12px; color: var(--muted); }
+@media(max-width:600px) {
+  .public-main.projector { padding: 24px 16px 80px; }
+  .spectator-actions { left: 16px; right: 16px; }
+  .spectator-actions .button { width: 100%; font-size: 14px; padding: 14px; }
+  .reaction-row .score { width: 100%; }
+  .reaction { flex: 1; }
+  .speaker-display > strong { font-size: 2rem; }
+}
