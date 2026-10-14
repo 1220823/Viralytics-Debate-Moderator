@@ -66,6 +66,17 @@ $$;
 create or replace function debate_private.snapshot(s jsonb,n bigint) returns jsonb language sql immutable set search_path='' as $$
  select jsonb_build_object('timers',jsonb_build_object('a',debate_private.paused_timer(s->'timers'->'a',n),'b',debate_private.paused_timer(s->'timers'->'b',n)), 'penalties',s->'penalties','speakers',s->'speakers','dimmed',coalesce(s->'dimmed','{"a":false,"b":false}'::jsonb))
 $$;
+create or replace function debate_private.auto_speakers(s jsonb) returns jsonb language plpgsql immutable set search_path='' as $$
+declare r jsonb; idx integer; ordinal integer; k text;
+begin
+ idx:=(s->>'roundIndex')::integer; r:=s->'rounds'->idx;
+ if r->>'kind' not in ('lightning','extra') then return s; end if;
+ select count(*) into ordinal from jsonb_array_elements(s->'rounds') with ordinality where ordinality<=idx+1 and value->>'kind' in ('lightning','extra');
+ if ordinal<=5 then foreach k in array array['a','b'] loop
+  if coalesce(s->'speakers'->>k,'')='' or not (s->'teams'->k->'members' ? (s->'speakers'->>k)) then s:=jsonb_set(s,array['speakers',k],to_jsonb(coalesce(s->'teams'->k->'members'->>(ordinal-1),''))); end if;
+ end loop; end if;
+ return s;
+end $$;
 create or replace function debate_private.goto_round(s jsonb,i integer,n bigint) returns jsonb language plpgsql immutable set search_path='' as $$
 declare old_id text; r jsonb; saved jsonb;
 begin
@@ -75,7 +86,7 @@ begin
  s:=jsonb_set(s,'{roundIndex}',to_jsonb(i)); r:=s->'rounds'->i; saved:=s->'history'->(r->>'id');
  if saved is not null then s:=s||saved;
  else s:=s||jsonb_build_object('timers',jsonb_build_object('a',jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',0),'b',jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',0)),'penalties',jsonb_build_object('a',0,'b',0),'speakers',jsonb_build_object('a','','b',''),'dimmed',jsonb_build_object('a',false,'b',false)); end if;
- return s;
+ return debate_private.auto_speakers(s);
 end $$;
 create or replace function debate_private.publish(s jsonb,v bigint) returns void language plpgsql set search_path='' as $$
 declare pub jsonb;
@@ -216,7 +227,6 @@ begin
  when 'toggle_qr' then
   s:=jsonb_set(s,'{qrVisible}',to_jsonb(not coalesce((s->>'qrVisible')::boolean,false)));
  when 'toggle_dim' then
-  if r->>'kind' not in ('lightning','extra') then raise exception 'Atenuar cartões está disponível nas rondas relâmpago.'; end if;
   if s->'dimmed' is null then s:=jsonb_set(s,'{dimmed}','{"a":false,"b":false}'); end if;
   s:=jsonb_set(s,array['dimmed',k],to_jsonb(not coalesce((s->'dimmed'->>k)::boolean,false)));
  when 'toggle_timer','toggle_all' then
@@ -253,6 +263,7 @@ begin
  when 'reset_round' then
   foreach k in array array['a','b'] loop s:=jsonb_set(s,array['timers',k],jsonb_build_object('remainingMs',(r->>'durationMs')::bigint,'endsAt',null,'epoch',(s->'timers'->k->>'epoch')::integer+1)); end loop;
   s:=s||jsonb_build_object('penalties',jsonb_build_object('a',0,'b',0),'speakers',jsonb_build_object('a','','b',''),'dimmed',jsonb_build_object('a',false,'b',false));
+  s:=debate_private.auto_speakers(s);
  when 'goto','next','previous' then
   if p_action='goto' then idx:=(p_payload->>'index')::integer; elsif p_action='next' then idx:=idx+1; else idx:=idx-1; end if;
   s:=debate_private.goto_round(s,idx,n);
@@ -294,6 +305,7 @@ begin
    arr:=arr||jsonb_build_array(rr);
   end loop;
   s:=jsonb_set(s,'{rounds}',arr);
+  s:=debate_private.auto_speakers(s);
  when 'open_final' then
   if s->>'phase'<>'debate' or r->>'kind'<>'closing' then raise exception 'Termina as rondas e avança para os closing statements.'; end if;
   s:=s||debate_private.snapshot(s,n)||jsonb_build_object('phase','final_poll');

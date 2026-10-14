@@ -1,12 +1,14 @@
 import { Backend, voterToken } from './backend.js';
 import { CHOICES } from './core.js';
-import { esc, debateView, charts, winner, Sound, tickClocks, bindHeader, toast, fatal, TITLE } from './ui.js';
+import { sortQuestions } from './seeds.js';
+import { esc, thumbIcon, debateView, charts, winner, Sound, tickClocks, bindHeader, toast, fatal, TITLE } from './ui.js';
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#question-dialog');
 const projector = new URLSearchParams(location.search).get('projecao') === '1';
 const qrDialog = document.querySelector('#presentation-qr-dialog');
 const suggestionsDialog = document.querySelector('#suggestions-dialog');
 let suggestions = [], suggestionsLoading = false, reactionBusy = false, suggestionsSession = '';
+let suggestionsRevision = 0;
 document.body.classList.toggle('presentation-page', projector);
 // Só o computador de apresentação pode ativar e emitir avisos sonoros.
 const sound = projector ? new Sound() : null;
@@ -86,19 +88,42 @@ function render(force = false) {
 function renderSuggestions() {
   if (!suggestionsDialog.open) return;
   const list = suggestionsDialog.querySelector('#public-questions');
-  list.innerHTML = suggestionsLoading && !suggestions.length ? '<p>A carregar sugestões…</p>' : suggestions.length ? suggestions.map(q => `<article class="public-question"><div><span class="question-status">${q.status === 'selected' ? 'Selecionada' : q.status === 'debated' ? 'Já debatida' : q.origin === 'moderation' ? 'Sugestão da organização' : 'Sugestão do público'}</span><p>${esc(q.text)}</p></div><div class="reaction-row"><strong class="score" aria-label="Pontuação">${q.score > 0 ? '+' : ''}${q.score} <small>pontos</small></strong><button class="button secondary reaction ${q.myReaction === 1 ? 'active' : ''}" data-question="${esc(q.id)}" data-reaction="1" aria-pressed="${q.myReaction === 1}" ${reactionBusy ? 'disabled' : ''}>Gosto <span>+1 · ${q.likes}</span></button><button class="button secondary reaction ${q.myReaction === -1 ? 'active' : ''}" data-question="${esc(q.id)}" data-reaction="-1" aria-pressed="${q.myReaction === -1}" ${reactionBusy ? 'disabled' : ''}>Não gosto <span>−1 · ${q.dislikes}</span></button></div></article>`).join('') : '<p>Ainda não há sugestões. Podes enviar a primeira.</p>';
+  if (!suggestions.length) { list.innerHTML = `<p>${suggestionsLoading ? 'A carregar sugestões…' : 'Ainda não há sugestões. Podes enviar a primeira.'}</p>`; return; }
+  const existing = new Map([...list.querySelectorAll('[data-suggestion]')].map(el=>[el.dataset.suggestion,el]));
+  // Preserve each card so changing the score does not restart the whole list.
+  let position = 0;
+  for (const q of sortQuestions(suggestions)) {
+    let card = existing.get(q.id);
+    if (!card) {
+      card = document.createElement('article'); card.className = 'public-question'; card.dataset.suggestion = q.id;
+      card.innerHTML = `<span class="question-points"><span class="score-number"></span><span class="sr-only"> pontos</span></span><p class="suggestion-text"></p><div class="reaction-row"><button class="reaction reaction-negative" type="button" data-reaction="-1" aria-label="Não gosto" title="Não gosto (−1)">${thumbIcon(-1)}</button><button class="reaction reaction-positive" type="button" data-reaction="1" aria-label="Gosto" title="Gosto (+1)">${thumbIcon(1)}</button></div>`;
+      card.querySelectorAll('[data-reaction]').forEach(b=>b.dataset.question=q.id);
+    }
+    const score = card.querySelector('.score-number'), previous = score.dataset.value;
+    score.textContent = `${q.score > 0 ? '+' : ''}${q.score}`;
+    score.dataset.value = String(q.score);
+    card.querySelector('.question-points').setAttribute('aria-label', `${q.score} pontos`);
+    if (previous !== undefined && Number(previous) !== q.score && !matchMedia('(prefers-reduced-motion: reduce)').matches) score.animate([{transform:'translateY(5px)',opacity:.3},{transform:'translateY(0)',opacity:1}],{duration:260,easing:'ease-out'});
+    card.querySelector('.suggestion-text').textContent = q.text;
+    card.querySelectorAll('[data-reaction]').forEach(b=>{ const active = Number(b.dataset.reaction) === q.myReaction; b.classList.toggle('active',active); b.setAttribute('aria-pressed',String(active)); b.disabled = reactionBusy; });
+    const next = list.children[position++];
+    if (next !== card) list.insertBefore(card, next || null);
+    existing.delete(q.id);
+  }
+  existing.forEach(card=>card.remove());
+  list.querySelectorAll(':scope > p').forEach(el=>el.remove());
 }
 async function loadSuggestions() {
-  if (suggestionsLoading || !suggestionsDialog.open || !data) return;
-  const session = data.state.sessionId; suggestionsLoading = true;
-  try { const answer = await backend.questions(token); if (data.state.sessionId === session) { suggestions = answer; suggestionsSession = session; renderSuggestions(); } }
+  if (suggestionsLoading || reactionBusy || !suggestionsDialog.open || !data) return;
+  const session = data.state.sessionId, revision = suggestionsRevision; suggestionsLoading = true;
+  try { const answer = await backend.questions(token); if (data.state.sessionId === session && suggestionsRevision === revision) { suggestions = sortQuestions(answer); suggestionsSession = session; renderSuggestions(); } }
   catch (e) { toast('Não foi possível atualizar as sugestões. ' + e.message, true); }
   finally { suggestionsLoading = false; }
 }
 function openSuggestions() {
   if (!receipt.initial || projector) return;
   if (suggestionsSession !== data.state.sessionId) suggestions = [];
-  suggestionsDialog.innerHTML = '<div class="dialog-header"><h2 id="suggestions-title">Perguntas do público</h2><button class="icon-button close-dialog" aria-label="Fechar">×</button></div><p>Vê as ideias já recebidas antes de sugerires outra. Gosto vale +1 e não gosto vale −1. Podes mudar a tua reação ou carregar de novo para a retirar.</p><button class="button primary suggest-new" id="new-question">Enviar uma pergunta</button><div id="public-questions" class="public-questions"></div>';
+  suggestionsDialog.innerHTML = '<div class="dialog-header"><h2 id="suggestions-title">Perguntas do público</h2><button class="icon-button close-dialog" aria-label="Fechar">×</button></div><p class="suggestions-description">Vê e avalia as ideias já recebidas antes de sugerires outra.</p><div class="suggest-new-row"><button class="button primary suggest-new" id="new-question">Enviar uma pergunta</button></div><div id="public-questions" class="public-questions"></div>';
   suggestionsDialog.querySelector('.close-dialog').onclick = () => suggestionsDialog.close();
   suggestionsDialog.querySelector('#new-question').onclick = () => { suggestionsDialog.close(); questionDialog(); };
   suggestionsDialog.showModal(); renderSuggestions(); loadSuggestions();
@@ -107,8 +132,8 @@ suggestionsDialog.addEventListener('click', async e => {
   const button = e.target.closest('[data-reaction]'); if (!button || button.disabled || reactionBusy) return;
   const q = suggestions.find(q => q.id === button.dataset.question); if (!q) return;
   const value = Number(button.dataset.reaction), session = data.state.sessionId;
-  reactionBusy = true; renderSuggestions();
-  try { const answer = await backend.reactQuestion(token, q.id, q.myReaction === value ? 0 : value); if (data.state.sessionId === session) suggestions = answer; }
+  reactionBusy = true; suggestionsRevision++; renderSuggestions();
+  try { const answer = await backend.reactQuestion(token, q.id, q.myReaction === value ? 0 : value); if (data.state.sessionId === session) suggestions = sortQuestions(answer); }
   catch (e) { toast(e.message, true); }
   finally { reactionBusy = false; renderSuggestions(); }
 });

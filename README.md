@@ -20,7 +20,13 @@ Para testar em vários dispositivos, abre a moderação no computador, a apresen
 
 O público só vê o acesso às perguntas depois de votar no inquérito inicial; durante os formulários de votação esse botão fica oculto. Em **Perguntas do público**, pode consultar sugestões, enviar uma nova com confirmação e dar **Gosto (+1)** ou **Não gosto (−1)**. Uma reação por pergunta e navegador; carregar novamente retira a reação. Perguntas iguais, ignorando maiúsculas e espaços, são recusadas. A moderação recebe as perguntas ordenadas por pontuação, incluindo na seleção de extras.
 
-Cada equipa tem um único botão branco que alterna entre **Retomar tempo** e **Parar tempo**. Nas relâmpago, **Atenuar cartão / Destacar cartão** altera apenas o aspeto público do cartão, sem pausar o relógio. A configuração visual é guardada por pergunta; voltar à anterior recupera-a com os relógios em pausa.
+Cada equipa tem um único botão branco que alterna entre **Retomar tempo** e **Parar tempo**. Em todas as rondas do debate, **Atenuar cartão / Destacar cartão** altera apenas o aspeto público do cartão, sem pausar o relógio. A configuração visual é guardada por pergunta; voltar à anterior recupera-a com os relógios em pausa.
+
+O popup do público mostra a pergunta, a pontuação no canto superior direito e dois ícones: **Não gosto** à esquerda (vermelho) e **Gosto** à direita (verde). A seleção intensifica a cor e o número muda com uma pequena animação. As perguntas surgem por pontuação descendente. Na moderação, cada sugestão mostra apenas o texto, a pontuação e **Usar como extra**.
+
+Nas primeiras cinco relâmpago (três fixas e duas primeiras extras), os participantes são preenchidos automaticamente pelo primeiro ao quinto nome de cada equipa. A moderação pode alterar a escolha; voltar à pergunta anterior preserva a seleção guardada. Extras seguintes ficam para seleção manual. A migração **supabase/updates/2026-10-14-participantes.sql** atualiza estes comandos sem apagar dados ou alterar tempos.
+
+O build usa nomes de ficheiro com identificadores de conteúdo para JavaScript e CSS. Ao recarregar a página, o navegador pode identificar os ficheiros atualizados sem reutilizar os controlos antigos em cache.
 
 Há **três relâmpago fixas**. As duas antigas perguntas finais entram automaticamente como sugestões da organização em cada sessão nova. Estão guardadas em `data/sugestoes-iniciais.json`; a fonte é `src/seeds.js`. Para voltar a importá-las no debate atual, executar **supabase/importar-sugestoes-iniciais.sql** no SQL Editor. A importação não as duplica.
 

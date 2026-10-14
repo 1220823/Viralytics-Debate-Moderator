@@ -4,6 +4,24 @@ import { newState, applyCommand, remaining, results, formatTime, currentRound } 
 import { validateConfig } from '../src/config.js';
 const initial = () => applyCommand(newState(0), 'start_debate', {}, 0);
 
+test('primeiras cinco relâmpago preenchem participantes por ordem, extras seguintes são manuais',()=>{
+  let s=initial();
+  for (let i=1;i<=3;i++) {
+    s=applyCommand(s,'goto',{index:i+1},0);
+    assert.deepEqual(s.speakers,{a:`Elemento ${i}`,b:`Elemento ${i}`});
+  }
+  for (let i=4;i<=6;i++) {
+    s=applyCommand(s,'add_extra',{text:`Extra ${i}?`},0);
+    assert.deepEqual(s.speakers,i<=5?{a:`Elemento ${i}`,b:`Elemento ${i}`}:{a:'',b:''});
+  }
+  s=applyCommand(s,'previous',{},0);assert.equal(s.speakers.a,'Elemento 5');
+  s=applyCommand(s,'set_speaker',{team:'a',name:'Elemento 2'},0);
+  s=applyCommand(s,'next',{},0);s=applyCommand(s,'previous',{},0);assert.equal(s.speakers.a,'Elemento 2');
+  s=applyCommand(s,'reset_round',{},0);assert.deepEqual(s.speakers,{a:'Elemento 5',b:'Elemento 5'});
+  s=applyCommand(s,'configure',{a:Array.from({length:5},(_,i)=>`A${i+1}`),b:Array.from({length:5},(_,i)=>`B${i+1}`)},0);
+  assert.deepEqual(s.speakers,{a:'A5',b:'B5'});
+});
+
 test('três relâmpago fixas e controlo visual separado do relógio',()=>{
   assert.equal(newState().rounds.filter(r=>r.kind==='lightning').length,3);
   let s=applyCommand(initial(),'toggle_timer',{team:'a'},1000);

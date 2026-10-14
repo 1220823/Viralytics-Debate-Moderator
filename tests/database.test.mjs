@@ -141,5 +141,21 @@ test('backend PostgreSQL: permissões, votações, pares e perguntas extra',asyn
       const end=await command('close_final');assert.deepEqual(end.state.result.before,{favor:15,neutral:2,contra:5});assert.deepEqual(end.state.result.after,{favor:12,neutral:1,contra:9});assert.equal(end.state.result.winner,'contra');assert.equal(end.state.result.totalInitial,23);
       await role('postgres');assert.equal((await db.query('select count(*) n from debate_private.votes where session_id=$1',[sid])).rows[0].n,1);
     });
+    await t.test('migração preserva os dados e preenche os cinco primeiros participantes',async()=>{
+      let d=await admin();const before=d.state;
+      await role('postgres');await db.exec(await readFile(new URL('../supabase/updates/2026-10-14-participantes.sql',import.meta.url),'utf8'));
+      d=await admin();assert.deepEqual(d.state,before);
+      d=await command('reset_event');const seeds=d.questions;
+      await command('start_debate');
+      d=await command('toggle_dim',{team:'a'});assert.equal(d.state.dimmed.a,true);
+      assert.equal(d.state.timers.a.remainingMs,300000);
+      for(let i=1;i<=3;i++) { d=await command('goto',{index:i+1});assert.deepEqual(d.state.speakers,{a:`Elemento ${i}`,b:`Elemento ${i}`}); }
+      for(let i=4;i<=6;i++) { d=await command('add_extra',{sourceId:seeds[(i-4)%2].id,text:`Extra ${i}?`});assert.deepEqual(d.state.speakers,i<=5?{a:`Elemento ${i}`,b:`Elemento ${i}`}:{a:'',b:''}); }
+      await command('previous');await command('set_speaker',{team:'b',name:'Elemento 1'});await command('next');
+      d=await command('previous');assert.equal(d.state.speakers.b,'Elemento 1');
+      d=await command('reset_round');assert.deepEqual(d.state.speakers,{a:'Elemento 5',b:'Elemento 5'});
+      d=await command('configure',{a:Array.from({length:5},(_,i)=>`A${i+1}`),b:Array.from({length:5},(_,i)=>`B${i+1}`)});
+      assert.deepEqual(d.state.speakers,{a:'A5',b:'B5'});
+    });
   }finally{await db.close();}
 });

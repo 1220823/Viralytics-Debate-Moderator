@@ -1,12 +1,21 @@
 import { build } from 'esbuild';
-import { mkdir, copyFile, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, writeFile, readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { newState } from '../src/core.js';
 import { SEED_QUESTIONS } from '../src/seeds.js';
 await mkdir('dist/assets', { recursive: true });
-await build({ entryPoints: { public: 'src/public.js', moderator: 'src/moderator.js' }, outdir: 'dist/assets', bundle: true, format: 'esm', splitting: true, chunkNames: 'shared-[hash]', minify: true, target: ['es2022'], legalComments: 'eof' });
-for (const f of ['index.html', 'moderacao.html', 'config.js']) await copyFile(f, `dist/${f}`);
-const { readFile } = await import('node:fs/promises');
-await writeFile('dist/assets/style.css', await readFile('src/style.css', 'utf8') + '\n' + await readFile('src/interaction.css', 'utf8'));
+const bundle = await build({ entryPoints: { public: 'src/public.js', moderator: 'src/moderator.js' }, outdir: 'dist/assets', bundle: true, format: 'esm', splitting: true, entryNames: '[name]-[hash]', chunkNames: 'shared-[hash]', metafile: true, minify: true, target: ['es2022'], legalComments: 'eof' });
+const css = await readFile('src/style.css', 'utf8') + '\n' + await readFile('src/interaction.css', 'utf8');
+const cssName = `style-${createHash('sha256').update(css).digest('hex').slice(0,12)}.css`;
+await writeFile(`dist/assets/${cssName}`, css);
+for (const [file,entry] of [['index.html','public'],['moderacao.html','moderator']]) {
+  const output = Object.entries(bundle.metafile.outputs).find(([,meta])=>meta.entryPoint === `src/${entry}.js`);
+  if (!output) throw Error(`Entrada não encontrada: ${entry}`);
+  const scriptPath = './' + output[0].replaceAll('\\','/').replace(/^dist\//,'');
+  const html = (await readFile(file,'utf8')).replace(`./assets/${entry}.js`,scriptPath).replace('./assets/style.css',`./assets/${cssName}`);
+  await writeFile(`dist/${file}`,html);
+}
+await copyFile('config.js','dist/config.js');
 await copyFile('static/icon.svg', 'dist/assets/icon.svg');
 await writeFile('dist/.nojekyll', '');
 // A migração contém o estado inicial para não exigir um segundo ficheiro no SQL Editor.
@@ -18,6 +27,7 @@ await writeFile('data/sugestoes-iniciais.json', JSON.stringify(SEED_QUESTIONS, n
 await writeFile('supabase/importar-sugestoes-iniciais.sql', '-- Executar no SQL Editor: importa as duas sugestões na sessão atual sem as duplicar.\ndo $$ declare s jsonb; v bigint; begin select state,version into s,v from debate_private.control where id=1 for update; perform debate_private.seed_questions((s->>\'sessionId\')::uuid); perform debate_private.publish(s,v); end $$;\n');
 await mkdir('supabase/updates', { recursive: true });
 await writeFile('supabase/updates/2026-10-14-interacao.sql', setup);
+await writeFile('supabase/updates/2026-10-14-participantes.sql', '-- Preenche participantes nas primeiras cinco relâmpago e permite atenuar cartões em todas as rondas. Preserva votos e tempos.\nbegin;\n' + sqlFunction('debate_private.auto_speakers') + '\n' + sqlFunction('debate_private.goto_round') + '\n' + sqlFunction('public.debate_command') + '\ncommit;\n');
 const commandStart = template.indexOf('create or replace function public.debate_command(');
 const commandEnd = template.indexOf('\nend $$;', commandStart) + '\nend $$;'.length;
 await writeFile('supabase/updates/2026-10-13-qr-popup.sql', '-- Atualiza apenas os comandos de moderação. Preserva votos, perguntas e tempos.\n-- Executar no SQL Editor se o projeto Supabase já foi configurado.\nbegin;\n' + template.slice(commandStart, commandEnd) + '\ncommit;\n');

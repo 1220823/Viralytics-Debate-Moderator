@@ -46,12 +46,20 @@ export function results(votes) {
 function requireDebate(s) { if (s.phase !== 'debate') throw Error('Este controlo está disponível durante o debate.'); }
 function number(value, min, max) { const n = Number(value); if (!Number.isFinite(n) || n < min || n > max) throw Error('Tempo inválido.'); return n; }
 function teamKey(team) { if (!['a', 'b'].includes(team)) throw Error('Equipa inválida.'); return team; }
+export function autoSpeakers(s) {
+  const r = currentRound(s);
+  if (!['lightning', 'extra'].includes(r.kind)) return s;
+  const ordinal = s.rounds.slice(0, s.roundIndex + 1).filter(r => ['lightning', 'extra'].includes(r.kind)).length;
+  if (ordinal <= 5) for (const k of ['a','b']) if (!s.speakers[k] || !s.teams[k].members.includes(s.speakers[k])) s.speakers[k] = s.teams[k].members[ordinal - 1] || '';
+  return s;
+}
 function switchRound(s, index, now) {
   if (!Number.isInteger(index) || index < 0 || index >= s.rounds.length) throw Error('Pergunta inválida.');
   s.history[currentRound(s).id] = snapshot(s, now);
   s.roundIndex = index;
   const saved = s.history[currentRound(s).id];
   Object.assign(s, saved ? copy(saved) : { timers: { a: timer(currentRound(s).durationMs), b: timer(currentRound(s).durationMs) }, penalties: { a: 0, b: 0 }, speakers: { a: '', b: '' }, dimmed: { a: false, b: false } });
+  autoSpeakers(s);
 }
 export function applyCommand(state, action, p = {}, now = Date.now(), context = {}) {
   const s = copy(state);
@@ -64,7 +72,6 @@ export function applyCommand(state, action, p = {}, now = Date.now(), context = 
       s.phase = 'debate'; s.qrVisible = false; break;
     case 'toggle_qr': s.qrVisible = !s.qrVisible; break;
     case 'toggle_dim': {
-      if (!['lightning', 'extra'].includes(currentRound(s).kind)) throw Error('Atenuar cartões está disponível nas rondas relâmpago.');
       const k = teamKey(p.team); s.dimmed[k] = !s.dimmed[k]; break;
     }
     case 'toggle_timer': case 'toggle_all': {
@@ -96,7 +103,7 @@ export function applyCommand(state, action, p = {}, now = Date.now(), context = 
     case 'reset_round': {
       const duration = currentRound(s).durationMs;
       s.timers = { a: timer(duration, s.timers.a.epoch + 1), b: timer(duration, s.timers.b.epoch + 1) };
-      s.penalties = { a: 0, b: 0 }; s.speakers = { a: '', b: '' }; s.dimmed = { a: false, b: false }; break;
+      s.penalties = { a: 0, b: 0 }; s.speakers = { a: '', b: '' }; s.dimmed = { a: false, b: false }; autoSpeakers(s); break;
     }
     case 'goto': switchRound(s, Number(p.index), now); break;
     case 'previous': switchRound(s, s.roundIndex - 1, now); break;
@@ -118,6 +125,7 @@ export function applyCommand(state, action, p = {}, now = Date.now(), context = 
     case 'configure':
       for (const k of ['a', 'b']) { const members = p[k]; if (!Array.isArray(members) || members.length < 5 || members.length > 30 || members.some((x) => typeof x !== 'string' || !x.trim() || x.length > 60) || new Set(members.map(x => x.trim())).size !== members.length) throw Error('Indica entre 5 e 30 nomes distintos por equipa.'); s.teams[k].members = members.map((x) => x.trim()); }
       { const first = p.lightningFirst || s.rounds.find(r => r.kind === 'lightning').first, closing = p.closingFirst || s.rounds.find(r => r.kind === 'closing').first; teamKey(first); teamKey(closing); let i = 0; for (const r of s.rounds) { if (['lightning', 'extra'].includes(r.kind)) { r.first = i++ % 2 ? (first === 'a' ? 'b' : 'a') : first; } else if (r.kind === 'closing') r.first = closing; } }
+      autoSpeakers(s);
       break;
     case 'open_final':
       if (s.phase !== 'debate' || currentRound(s).kind !== 'closing') throw Error('Termina as rondas e avança para os closing statements.');
